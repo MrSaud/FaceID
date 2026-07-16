@@ -1,0 +1,8 @@
+Django>=5.2,<6
+djangorestframework>=3.16
+django-cors-headers>=4.6
+faster-whisper>=1.2
+numpy>=2.0
+opencv-contrib-python-headless==4.11.0.86
+onnxruntime>=1.17
+pillow>=11.0

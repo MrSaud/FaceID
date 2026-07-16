@@ -1,0 +1,224 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .guide { max-width: 980px; line-height: 1.55; }
+  .guide h2 { margin-top: 28px; margin-bottom: 10px; font-size: 1.15rem; }
+  .guide h3 { margin-top: 18px; margin-bottom: 8px; font-size: 1rem; }
+  .guide p, .guide li { color: #333; }
+  .guide pre {
+    background: #1e1e1e; color: #f5f5f5; padding: 14px 16px; border-radius: 6px;
+    overflow-x: auto; font-size: 12px; line-height: 1.45;
+  }
+  .guide code { background: #f4f4f5; padding: 2px 5px; border-radius: 4px; }
+  .guide table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; }
+  .guide th, .guide td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; vertical-align: top; }
+  .guide th { background: #f8f8f8; }
+  .guide .note {
+    background: #fffbe6; border: 1px solid #f0e6a6; border-radius: 6px;
+    padding: 12px 14px; margin: 14px 0;
+  }
+  .guide .steps { counter-reset: step; list-style: none; padding-left: 0; }
+  .guide .steps li { counter-increment: step; margin: 10px 0; padding-left: 34px; position: relative; }
+  .guide .steps li::before {
+    content: counter(step); position: absolute; left: 0; top: 0;
+    width: 22px; height: 22px; border-radius: 50%; background: #417690; color: #fff;
+    text-align: center; line-height: 22px; font-size: 12px; font-weight: 700;
+  }
+</style>
+
+<div class="guide">
+  <h1>{{ title }}</h1>
+  <p>
+  FaceID is a REST API for <strong>face detection</strong>, <strong>face comparison</strong>,
+  and <strong>hardened liveness</strong>. Every <code>/api/v1/</code> endpoint requires a client
+  <strong>code</strong> and <strong>token</strong> created in this admin.
+  </p>
+
+  <div class="note">
+    <strong>Quick start</strong>
+    <ol class="steps">
+      <li>Go to <a href="{% url 'admin:api_apiclient_add' %}">API clients → Add</a>.</li>
+      <li>Save the client. Copy the <strong>code</strong> and <strong>token</strong> immediately — the token is shown only once.</li>
+      <li>Send both values on every API request using the headers below.</li>
+      <li>Test in browser at <a href="/test/liveness/" target="_blank">/test/liveness/</a>.</li>
+    </ol>
+  </div>
+
+  <h2>1. Authentication</h2>
+  <p>All requests to <code>/api/v1/*</code> must include:</p>
+  <pre>X-Client-Code: CD82
+Authorization: Bearer fid_live_xxxxxxxxxxxxxxxx</pre>
+  <table>
+    <tr><th>Header</th><th>Description</th></tr>
+    <tr><td><code>X-Client-Code</code></td><td>Short client code from admin, e.g. <code>CD82</code></td></tr>
+    <tr><td><code>Authorization</code></td><td><code>Bearer</code> + the secret token shown once on create/regenerate</td></tr>
+  </table>
+  <p>
+  Optional client restriction: set <code>allowed_endpoints</code> on the API client.
+  Leave empty for full access, or use JSON like <code>["detect", "liveness", "compare", "health"]</code>.
+  </p>
+
+  <h2>2. Base URL</h2>
+  <pre>http://127.0.0.1:8000/api/v1/</pre>
+
+  <h2>3. Endpoints</h2>
+  <table>
+    <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+    <tr><td>GET</td><td><code>/health/</code></td><td>Service and model status</td></tr>
+    <tr><td>POST</td><td><code>/detect/</code></td><td>Detect face(s) in an image</td></tr>
+    <tr><td>POST</td><td><code>/compare/</code></td><td>Compare two faces</td></tr>
+    <tr><td>POST</td><td><code>/liveness/challenge/</code></td><td>Get a random liveness challenge</td></tr>
+    <tr><td>POST</td><td><code>/liveness/</code></td><td>Verify motion/action liveness</td></tr>
+    <tr><td>POST</td><td><code>/liveness/speech/</code></td><td>Verify <code>say_digits</code> with audio + video</td></tr>
+  </table>
+
+  <h2>4. Health check</h2>
+  <pre>curl -X GET http://127.0.0.1:8000/api/v1/health/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN"</pre>
+
+  <h2>5. Detect face</h2>
+  <h3>JSON (base64)</h3>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/detect/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"image_base64": "BASE64_IMAGE_HERE"}'</pre>
+  <h3>Multipart file</h3>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/detect/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "image=@/path/to/photo.jpg"</pre>
+
+  <h2>6. Compare faces</h2>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/compare/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image1_base64": "BASE64_IMAGE_1",
+    "image2_base64": "BASE64_IMAGE_2",
+    "threshold": 0.35
+  }'</pre>
+
+  <h2>7. Liveness flow</h2>
+  <h3>Step A — create challenge</h3>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/liveness/challenge/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"digits_match_rate": 100}'</pre>
+  <p>Random actions: <code>blink</code>, <code>turn_left</code>, <code>turn_right</code>, <code>nod</code>, <code>smile</code>, <code>say_digits</code>.</p>
+  <p>For <code>say_digits</code>, optional <code>digits_match_rate</code>:</p>
+  <ul>
+    <li><code>100</code> → 4 of 4 digits must match</li>
+    <li><code>75</code> → 3 of 4</li>
+    <li><code>50</code> → 2 of 4</li>
+  </ul>
+
+  <h3>Step B — motion challenges</h3>
+  <p>For blink / turn / nod / smile, capture 5+ live camera frames while performing the action:</p>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/liveness/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "challenge_id": "UUID_FROM_CHALLENGE",
+    "challenge_token": "TOKEN_FROM_CHALLENGE",
+    "source": "camera",
+    "frames_base64": ["frame1", "frame2", "frame3", "frame4", "frame5"]
+  }'</pre>
+
+  <h3>Step C — say_digits (speech)</h3>
+  <p>Record camera + microphone together, then upload the clip:</p>
+  <pre>curl -X POST http://127.0.0.1:8000/api/v1/liveness/speech/ \
+  -H "X-Client-Code: YOUR_CODE" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "recording=@/path/to/recording.webm" \
+  -F "challenge_id=UUID_FROM_CHALLENGE" \
+  -F "challenge_token=TOKEN_FROM_CHALLENGE" \
+  -F "source=camera"</pre>
+
+  <h2>8. What liveness checks</h2>
+  <ul>
+    <li><strong>Motion challenges:</strong> valid challenge, camera source, face motion, requested action, MiniFAS anti-spoof, screen-risk heuristic</li>
+    <li><strong>say_digits:</strong> spoken digits match rate, lip-sync, same face throughout, motion, anti-spoof, screen risk</li>
+  </ul>
+
+  <h2>9. Risk score response</h2>
+  <p>Liveness endpoints now return a confidence-based decision, not only <code>is_live</code>:</p>
+  <pre>{
+  "is_live": true,
+  "risk_score": 0.18,
+  "confidence": 0.82,
+  "decision": "allow",
+  "label": "live",
+  "risk": {
+    "risk_score": 0.18,
+    "confidence": 0.82,
+    "decision": "allow",
+    "thresholds": { "allow": 0.30, "review": 0.60 },
+    "signals": {
+      "motion": 0.91,
+      "action": 0.88,
+      "antispoof": 0.76,
+      "screen": 0.88
+    }
+  }
+}</pre>
+  <table>
+    <tr><th>decision</th><th>Meaning</th></tr>
+    <tr><td><code>allow</code></td><td>Low risk — treat as live (<code>is_live: true</code>)</td></tr>
+    <tr><td><code>review</code></td><td>Borderline — retry, OTP, or manual review</td></tr>
+    <tr><td><code>deny</code></td><td>High risk — treat as spoof (<code>is_live: false</code>)</td></tr>
+  </table>
+  <p>Optional thresholds on liveness requests:</p>
+  <pre>{
+  "allow_risk": 0.30,
+  "review_risk": 0.60
+}</pre>
+
+  <h2>10. Common responses</h2>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>200</code></td><td>Request processed; check <code>ok</code> / <code>is_live</code> in body</td></tr>
+    <tr><td><code>400</code></td><td>Bad image, recording, expired challenge, or validation error</td></tr>
+    <tr><td><code>403</code></td><td>Missing/invalid code or token, expired client, or endpoint not allowed</td></tr>
+  </table>
+
+  <h2>11. Admin tips</h2>
+  <ul>
+    <li>Create one API client per external app or partner.</li>
+    <li>Use <strong>Regenerate token</strong> if a token is leaked.</li>
+    <li>Set <code>expires_at</code> for temporary access.</li>
+    <li>Disable clients with <code>is_active = false</code> instead of deleting them.</li>
+    <li>Check <code>last_used_at</code> to see recent API usage.</li>
+  </ul>
+
+  <h2>12. JavaScript example</h2>
+  <pre>const headers = {
+  "X-Client-Code": "YOUR_CODE",
+  "Authorization": "Bearer YOUR_TOKEN",
+  "Content-Type": "application/json",
+};
+
+const response = await fetch("http://127.0.0.1:8000/api/v1/detect/", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ image_base64: "..." }),
+});
+
+const data = await response.json();
+console.log(data);</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "admin/change_list.html" %}
+
+{% block content_title %}
+  {% if api_guide_url %}
+  <div style="margin-bottom: 14px; padding: 12px 14px; background: #eef6ff; border: 1px solid #c8def7; border-radius: 6px;">
+    <strong>Need help calling the API?</strong>
+    Open the full guide here:
+    <a href="{{ api_guide_url }}">API usage guide</a>
+    (authentication, curl examples, liveness flow, and error codes).
+  </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FaceID — Hardened liveness</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; background: #f4f4f5; color: #18181b; }
+    main { max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    p { margin: 0 0 16px; color: #52525b; line-height: 1.45; }
+    .challenge {
+      background: #fff; border: 1px solid #e4e4e7; border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 16px; font-size: 1.05rem;
+    }
+    .challenge strong { color: #18181b; }
+    .workspace {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr);
+      gap: 14px; align-items: start;
+    }
+    .panel {
+      background: #fff; border: 1px solid #e4e4e7; border-radius: 10px; padding: 12px;
+    }
+    .panel h2 { font-size: 1rem; margin: 0 0 12px; }
+    video, canvas {
+      width: 100%; aspect-ratio: 4 / 3; object-fit: cover;
+      background: #111; border-radius: 8px; display: block;
+    }
+    video { border: 3px solid #22c55e; box-sizing: border-box; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+    .setting {
+      display: flex; align-items: center; gap: 8px; margin-top: 12px;
+      color: #52525b; font-size: .85rem;
+    }
+    select, input[type="text"], input[type="password"] {
+      border: 1px solid #d4d4d8; border-radius: 7px; padding: 7px 9px;
+      background: #fff; color: #18181b;
+    }
+    .auth-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;
+    }
+    .auth-grid label { display: flex; flex-direction: column; gap: 4px; font-size: .8rem; color: #52525b; }
+    button {
+      border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600;
+      background: #18181b; color: #fff; cursor: pointer;
+    }
+    button.secondary { background: #e4e4e7; color: #18181b; }
+    #check { background: #f97316; color: #fff; }
+    #check:hover { background: #ea580c; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    pre {
+      background: #18181b; color: #f4f4f5; padding: 14px; border-radius: 8px;
+      overflow: auto; min-height: 220px; max-height: 340px; margin: 0; white-space: pre-wrap;
+      font-size: .78rem;
+    }
+    .hint { font-size: .9rem; }
+    @media (max-width: 760px) {
+      body { padding: 14px; }
+      .workspace { grid-template-columns: 1fr; }
+      pre { min-height: 180px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Hardened liveness test</h1>
+    <p class="hint">
+      Uses challenge-response + motion + MiniFAS antispoof + camera and microphone.
+      Replay of a random recorded video usually fails because the action is random.
+    </p>
+
+    <div class="challenge" id="challengeBox">Challenge not loaded yet.</div>
+
+    <div class="workspace">
+      <section class="panel">
+        <h2>Live camera</h2>
+        <video id="video" playsinline webkit-playsinline autoplay muted></video>
+        <canvas id="canvas" hidden></canvas>
+
+        <label class="setting">
+          Say-digits match rate
+          <select id="digitsMatchRate">
+            <option value="100">100% — 4 of 4</option>
+            <option value="75">75% — 3 of 4</option>
+            <option value="50">50% — 2 of 4</option>
+          </select>
+        </label>
+
+        <div class="auth-grid">
+          <label>
+            Client code
+            <input id="clientCode" type="text" placeholder="CD82" autocomplete="off" />
+          </label>
+          <label>
+            API token
+            <input id="clientToken" type="password" placeholder="fid_live_..." autocomplete="off" />
+          </label>
+        </div>
+
+        <div class="row">
+          <button id="start" type="button">Start camera</button>
+          <button id="newChallenge" type="button" class="secondary" disabled>New challenge</button>
+          <button id="check" type="button" class="secondary" disabled>Perform &amp; check</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Result preview</h2>
+        <pre id="out">Waiting…</pre>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const out = document.getElementById("out");
+    const challengeBox = document.getElementById("challengeBox");
+    const startBtn = document.getElementById("start");
+    const challengeBtn = document.getElementById("newChallenge");
+    const checkBtn = document.getElementById("check");
+    const digitsMatchRate = document.getElementById("digitsMatchRate");
+    const clientCode = document.getElementById("clientCode");
+    const clientToken = document.getElementById("clientToken");
+
+    let challenge = null;
+    let cameraStream = null;
+
+    const savedCode = localStorage.getItem("faceid_client_code");
+    const savedToken = localStorage.getItem("faceid_client_token");
+    if (savedCode) clientCode.value = savedCode;
+    if (savedToken) clientToken.value = savedToken;
+
+    function apiAuthHeaders(extra = {}) {
+      const code = clientCode.value.trim().toUpperCase();
+      const token = clientToken.value.trim();
+      if (!code || !token) {
+        throw new Error("Enter client code and API token from Django admin.");
+      }
+      localStorage.setItem("faceid_client_code", code);
+      localStorage.setItem("faceid_client_token", token);
+      return {
+        "X-Client-Code": code,
+        Authorization: `Bearer ${token}`,
+        ...extra,
+      };
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function captureFrame() {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      if (!w || !h) return null;
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", 0.92).split(",")[1];
+    }
+
+    function requestChallenge() {
+      return fetch("/api/v1/liveness/challenge/", {
+        method: "POST",
+        headers: apiAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          digits_match_rate: Number(digitsMatchRate.value),
+        }),
+      });
+    }
+
+    async function loadChallenge() {
+      const res = await requestChallenge();
+      challenge = await res.json();
+      const digits = challenge.action === "say_digits"
+        ? `<div style="font-size:1.7rem;font-weight:700;letter-spacing:.35rem;margin-top:8px">${challenge.digits_text}</div>`
+        : "";
+      challengeBox.innerHTML =
+        `<strong>Do this now:</strong> ${challenge.instruction}<br>` +
+        digits +
+        `<span class="hint">Action: ${challenge.action} · expires in ${challenge.expires_in}s` +
+        (challenge.action === "say_digits"
+          ? ` · required: ${challenge.digits_required_matches}/4 (${challenge.digits_match_rate}%)`
+          : "") +
+        `</span>`;
+      out.textContent = "Challenge ready. Perform the action while capturing.";
+      checkBtn.disabled = false;
+    }
+
+    startBtn.onclick = async () => {
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } },
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+        video.srcObject = cameraStream;
+        challengeBtn.disabled = false;
+        await loadChallenge();
+      } catch (err) {
+        out.textContent = "Camera error: " + err.message;
+      }
+    };
+
+    challengeBtn.onclick = () => loadChallenge().catch((e) => {
+      out.textContent = "Challenge error: " + e.message;
+    });
+
+    async function recordSpeechChallenge() {
+      if (!cameraStream || typeof MediaRecorder === "undefined") {
+        throw new Error("This browser does not support audio/video recording.");
+      }
+
+      const mimeTypes = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+        "video/mp4",
+      ];
+      const mimeType = mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      const recorder = new MediaRecorder(cameraStream, mimeType ? { mimeType } : undefined);
+      const chunks = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size) chunks.push(event.data);
+      };
+      const stopped = new Promise((resolve, reject) => {
+        recorder.onstop = resolve;
+        recorder.onerror = () => reject(new Error("Camera recording failed."));
+      });
+
+      recorder.start(250);
+      const seconds = 8;
+      for (let remaining = seconds; remaining > 0; remaining--) {
+        out.textContent =
+          `Say clearly: ${challenge.digits_text}\nRecording audio and video… ${remaining}s`;
+        await sleep(1000);
+      }
+      recorder.stop();
+      await stopped;
+
+      const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+      if (!blob.size) throw new Error("The browser produced an empty recording.");
+
+      const form = new FormData();
+      const extension = blob.type.includes("mp4") ? "mp4" : "webm";
+      form.append("recording", blob, `liveness.${extension}`);
+      form.append("challenge_id", challenge.challenge_id);
+      form.append("challenge_token", challenge.challenge_token);
+      form.append("source", "camera");
+
+      out.textContent = "Transcribing digits and checking lip-sync…";
+      const response = await fetch("/api/v1/liveness/speech/", {
+        method: "POST",
+        headers: apiAuthHeaders(),
+        body: form,
+      });
+      return response.json();
+    }
+
+    async function refreshChallengeWithoutClearingResult() {
+      const previous = challenge;
+      try {
+        const response = await requestChallenge();
+        challenge = await response.json();
+        const digits = challenge.action === "say_digits"
+          ? `<div style="font-size:1.7rem;font-weight:700;letter-spacing:.35rem;margin-top:8px">${challenge.digits_text}</div>`
+          : "";
+        challengeBox.innerHTML =
+          `<strong>Next challenge:</strong> ${challenge.instruction}<br>` +
+          digits +
+          `<span class="hint">Action: ${challenge.action} · expires in ${challenge.expires_in}s` +
+          (challenge.action === "say_digits"
+            ? ` · required: ${challenge.digits_required_matches}/4 (${challenge.digits_match_rate}%)`
+            : "") +
+          `</span>`;
+      } catch (error) {
+        challenge = previous;
+        challengeBox.innerHTML =
+          `<strong>Result shown below.</strong> Click "New challenge" for another attempt.` +
+          `<br><span class="hint">${error.message}</span>`;
+      }
+    }
+
+    checkBtn.onclick = async () => {
+      if (!challenge) {
+        out.textContent = "Load a challenge first.";
+        return;
+      }
+      checkBtn.disabled = true;
+      challengeBtn.disabled = true;
+      const frames = [];
+      try {
+        for (let seconds = 3; seconds > 0; seconds--) {
+          out.textContent =
+            `Get ready: ${challenge.instruction}\nStarting in ${seconds}…`;
+          await sleep(1000);
+        }
+
+        if (challenge.action === "say_digits") {
+          const json = await recordSpeechChallenge();
+          out.textContent = JSON.stringify(json, null, 2);
+          await refreshChallengeWithoutClearingResult();
+          return;
+        }
+
+        const frameCount = 18;
+        out.textContent = `Perform now: ${challenge.instruction}\nCapturing…`;
+        for (let i = 0; i < frameCount; i++) {
+          const frame = captureFrame();
+          if (!frame) throw new Error("Camera not ready yet.");
+          frames.push(frame);
+          out.textContent =
+            `Perform now: ${challenge.instruction}\nCapturing… ${i + 1}/${frameCount}`;
+          await sleep(350);
+        }
+
+        out.textContent = "Verifying…";
+        const res = await fetch("/api/v1/liveness/", {
+          method: "POST",
+          headers: apiAuthHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            frames_base64: frames,
+            challenge_id: challenge.challenge_id,
+            challenge_token: challenge.challenge_token,
+            source: "camera",
+          }),
+        });
+        const json = await res.json();
+        out.textContent = JSON.stringify(json, null, 2);
+        await refreshChallengeWithoutClearingResult();
+      } catch (err) {
+        out.textContent = "Request failed: " + err.message;
+      } finally {
+        checkBtn.disabled = false;
+        challengeBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+python-version
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+.env
+.DS_Store
+*.egg-info/
+dist/
+build/
+.idea/
+.vscode/
+staticfiles/
+faceid.sock
+*.log
